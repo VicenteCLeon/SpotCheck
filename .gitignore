@@ -23,6 +23,8 @@ frontend/npm-debug.log*
 frontend/yarn-error.log*
 frontend/.pnpm-debug.log*
 DEPLOY.md
+CONTEXT.txt
+deploy/
 .claude
 # --- Entorno y Secretos ---
 .env
