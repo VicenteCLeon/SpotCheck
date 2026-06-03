@@ -4,11 +4,10 @@ import { statusOf, fmt, clockNow } from "./data";
 import {
   fetchCameras,
   streamUrl,
-  CAMERA_META,
   fetchHourlyOccupancy,
-  TOTAL_CAPACITY,
   UnauthorizedError,
   isTokenExpired,
+  parseSessionPayload,
 } from "./api";
 import type { CameraDTO } from "./api";
 import TopBar from "./components/TopBar";
@@ -17,6 +16,8 @@ import FacultyCard from "./components/FacultyCard";
 import DayChart from "./components/DayChart";
 import ActivityLog from "./components/ActivityLog";
 import Login from "./components/Login";
+import AdminPanel from "./components/AdminPanel";
+import LegalNotice, { RETENTION_MONTHS } from "./components/LegalNotice";
 
 const WARN_T = 60;
 const DANGER_T = 85;
@@ -45,28 +46,42 @@ export default function App() {
   const [connError, setConnError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<"admin" | "viewer">("viewer");
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [legalOpen, setLegalOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(true);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [totalSpark, setTotalSpark] = useState<number[]>([]);
 
   // Historial real de conteos por cámara (no dispara re-renders)
   const historyRef = useRef<Map<string, number[]>>(new Map());
+  // Capacidad total actualizada en cada poll (para el gráfico histórico)
+  const totalCapRef = useRef<number>(0);
 
   // ── Restaurar sesión desde localStorage ────────────────────────────────────
   useEffect(() => {
     const token = readStoredToken();
-    if (token) setSessionToken(token);
-    else setLoading(false);
+    if (token) {
+      setSessionToken(token);
+      const payload = parseSessionPayload(token);
+      setUserRole(payload?.role === "admin" ? "admin" : "viewer");
+    } else {
+      setLoading(false);
+    }
   }, []);
 
   // ── Logout ─────────────────────────────────────────────────────────────────
   const handleLogout = useCallback((reason?: string) => {
     localStorage.removeItem(AUTH_STORAGE_KEY);
     setSessionToken(null);
+    setUserRole("viewer");
+    setAdminOpen(false);
     setFaculties([]);
     setDayCurve([]);
     setActivity([]);
     setTotalSpark([]);
     historyRef.current.clear();
+    totalCapRef.current = 0;
     setLoading(true);
     if (reason) setConnError(reason);
     else setConnError(null);
@@ -105,7 +120,6 @@ export default function App() {
           const prevMap = new Map(prev.map((f) => [f.id, f]));
 
           const next = cams.map((c) => {
-            const meta = CAMERA_META[c.id] ?? { capacity: 50, building: "Sin ubicación" };
             const prevCount = prevMap.get(c.id)?.occ ?? c.count;
 
             // Acumular historial real para el sparkline
@@ -116,9 +130,9 @@ export default function App() {
             return {
               id: c.id,
               name: c.name,
-              cap: meta.capacity,
+              cap: c.capacity,
               occ: c.count,
-              building: meta.building,
+              building: c.building || "Sin ubicación",
               cams: 1,
               fps: 30,
               delta: c.count - prevCount,
@@ -128,6 +142,9 @@ export default function App() {
               spark: newHist,
             };
           });
+
+          // Actualizar capacidad total para el gráfico histórico
+          totalCapRef.current = next.reduce((s, f) => s + f.cap, 0);
 
           const timeLabel = clockNow(new Date());
           const events: ActivityEntry[] = [];
@@ -226,7 +243,7 @@ export default function App() {
           return {
             t: Number(h.bucket),
             people: Math.round(people),
-            pct: TOTAL_CAPACITY > 0 ? people / TOTAL_CAPACITY : 0,
+            pct: totalCapRef.current > 0 ? people / totalCapRef.current : 0,
           };
         });
         setDayCurve(points);
@@ -250,6 +267,8 @@ export default function App() {
         onSuccess={(token, _email) => {
           localStorage.setItem(AUTH_STORAGE_KEY, token);
           setSessionToken(token);
+          const payload = parseSessionPayload(token);
+          setUserRole(payload?.role === "admin" ? "admin" : "viewer");
           setConnError(null);
           setLoading(true);
         }}
@@ -270,7 +289,21 @@ export default function App() {
     <div className="min-h-screen bg-bg">
       <div className="px-3 pt-3 pb-[88px] md:px-7 md:pt-5 md:pb-10 max-w-[1440px] mx-auto">
 
-        <TopBar now={now} overallStatus={overallStatus} onLogout={() => handleLogout()} />
+        <TopBar
+          now={now}
+          overallStatus={overallStatus}
+          userRole={userRole}
+          onManageCameras={() => setAdminOpen(true)}
+          onLogout={() => handleLogout()}
+        />
+
+        {adminOpen && sessionToken && userRole === "admin" && (
+          <AdminPanel
+            token={sessionToken}
+            onClose={() => setAdminOpen(false)}
+            onSessionExpired={() => handleLogout("Sesión inválida. Vuelve a iniciar sesión.")}
+          />
+        )}
 
         {connError && (
           <div className="mt-3 px-3.5 py-2.5 rounded-[10px] border border-danger bg-danger-bg text-danger text-[12px] font-medium flex items-center gap-2">
@@ -281,38 +314,63 @@ export default function App() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 mt-3">
-          <KpiCard
-            label="Aforo total" value={fmt(totalOcc)} unit={`/ ${fmt(totalCap)}`}
-            delta={`${overallPct}%`}
-            deltaKind={overallStatus === "danger" ? "up" : overallStatus === "warn" ? "flat" : "down"}
-            foot="Personas detectadas ahora"
-            spark={totalSpark.length >= 2 ? totalSpark : undefined}
-          />
-          <KpiCard
-            label="Ocupación general" value={`${overallPct}`} unit="%"
-            delta={overallStatus === "danger" ? "crítico" : overallStatus === "warn" ? "atención" : "normal"}
-            deltaKind={overallStatus === "danger" ? "up" : overallStatus === "warn" ? "flat" : "down"}
-            foot="Promedio del campus"
-          />
-          <KpiCard
-            label="Cámaras en línea" value={onlineCount} unit={`/ ${faculties.length}`}
-            delta={onlineCount === faculties.length && faculties.length > 0 ? "todas activas" : "revisar"}
-            deltaKind={onlineCount === faculties.length ? "flat" : "up"}
-            foot="Estado de conexión"
-          />
-          <KpiCard
-            label="Cámaras en alerta" value={alerts} unit={`/ ${faculties.length}`}
-            delta={`${criticals} críticas`} deltaKind={criticals > 0 ? "up" : "flat"}
-            foot="Aforo ≥ umbral ámbar"
-          />
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setSummaryOpen((v) => !v)}
+            aria-expanded={summaryOpen}
+            className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-[10px] border border-line bg-surface text-left transition-colors hover:border-line-strong"
+          >
+            <div className="flex items-center gap-2.5">
+              <span className="text-[13px] md:text-[13.5px] font-semibold">Resumen general</span>
+              <span className="text-[11px] text-ink-3 hidden sm:inline">
+                {fmt(totalOcc)} / {fmt(totalCap)} · {overallPct}% ocupación
+              </span>
+            </div>
+            <svg
+              width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              className={`text-ink-3 transition-transform duration-200 ${summaryOpen ? "rotate-180" : ""}`}
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+
+          {summaryOpen && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 mt-2.5">
+              <KpiCard
+                label="Aforo total" value={fmt(totalOcc)} unit={`/ ${fmt(totalCap)}`}
+                delta={`${overallPct}%`}
+                deltaKind={overallStatus === "danger" ? "up" : overallStatus === "warn" ? "flat" : "down"}
+                foot="Personas detectadas ahora"
+                spark={totalSpark.length >= 2 ? totalSpark : undefined}
+              />
+              <KpiCard
+                label="Ocupación general" value={`${overallPct}`} unit="%"
+                delta={overallStatus === "danger" ? "crítico" : overallStatus === "warn" ? "atención" : "normal"}
+                deltaKind={overallStatus === "danger" ? "up" : overallStatus === "warn" ? "flat" : "down"}
+                foot="Promedio del campus"
+              />
+              <KpiCard
+                label="Cámaras en línea" value={onlineCount} unit={`/ ${faculties.length}`}
+                delta={onlineCount === faculties.length && faculties.length > 0 ? "todas activas" : "revisar"}
+                deltaKind={onlineCount === faculties.length ? "flat" : "up"}
+                foot="Estado de conexión"
+              />
+              <KpiCard
+                label="Cámaras en alerta" value={alerts} unit={`/ ${faculties.length}`}
+                delta={`${criticals} críticas`} deltaKind={criticals > 0 ? "up" : "flat"}
+                foot="Aforo ≥ umbral ámbar"
+              />
+            </div>
+          )}
         </div>
 
         <div className="mx-1 mt-6 mb-3">
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div>
               <h2 className="m-0 text-[14px] md:text-[15px] font-semibold tracking-tight">Cámaras · en tiempo real</h2>
-              <div className="text-ink-3 text-[11px] md:text-[12px] mt-0.5">YOLOv8 · refresco cada 2 s</div>
+              <div className="text-ink-3 text-[11px] md:text-[12px] mt-0.5">refresco cada 2 s</div>
             </div>
             <div className="flex gap-3 text-[11px] text-ink-3 items-center">
               <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-[2px] bg-ok" /> Normal</span>
@@ -359,7 +417,23 @@ export default function App() {
             <ActivityLog entries={activity} />
           </div>
         </div>
+
+        <footer className="mt-6 pt-4 border-t border-line text-[11px] text-ink-4 flex flex-wrap items-center justify-between gap-2">
+          <span>
+            Recinto con cámaras para medición de aforo · No se almacenan imágenes; solo conteos
+            numéricos (retención {RETENTION_MONTHS} meses).
+          </span>
+          <button
+            type="button"
+            onClick={() => setLegalOpen(true)}
+            className="underline hover:text-ink-2"
+          >
+            Aviso de videovigilancia
+          </button>
+        </footer>
       </div>
+
+      {legalOpen && <LegalNotice onClose={() => setLegalOpen(false)} />}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { verifyGoogleToken } from "../api";
+import LegalNotice from "./LegalNotice";
 
 const ALLOWED_DOMAIN = "@mail.pucv.cl";
 
@@ -13,6 +14,7 @@ export default function Login({ onSuccess }: LoginProps) {
   const initializedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [showLegal, setShowLegal] = useState(false);
 
   useEffect(() => {
     const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
@@ -102,12 +104,25 @@ export default function Login({ onSuccess }: LoginProps) {
               )}
             </div>
 
-            <div className="mt-5 flex items-center justify-between text-[11px] text-ink-4">
-              <span>Acceso seguro · Sesión válida 8 horas</span>
+            <div className="mt-5 pt-4 border-t border-line">
+              <p className="m-0 text-[11px] text-ink-4 leading-relaxed">
+                Recinto con cámaras para <b>medición de aforo</b>. No se almacenan imágenes ni
+                grabaciones: solo conteos numéricos.{" "}
+                <button
+                  type="button"
+                  onClick={() => setShowLegal(true)}
+                  className="underline text-ink-3 hover:text-ink"
+                >
+                  Ver aviso de videovigilancia
+                </button>
+              </p>
+              <div className="mt-2 text-[11px] text-ink-4">Acceso seguro · Sesión válida 8 horas</div>
             </div>
           </div>
         </div>
       </div>
+
+      {showLegal && <LegalNotice onClose={() => setShowLegal(false)} />}
     </div>
   );
 }

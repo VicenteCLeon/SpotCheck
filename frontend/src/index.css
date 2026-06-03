@@ -33,6 +33,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Tailwind v4 ya no pone cursor:pointer en los botones por defecto.
+   Restauramos el cursor de mano en elementos interactivos. */
+button:not(:disabled),
+[role="button"]:not(:disabled),
+label[for],
+a[href] {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
 /* Semáforo pulse */
 @keyframes sc-pulse {
   0% {

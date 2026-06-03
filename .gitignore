@@ -22,7 +22,8 @@ frontend/.cache/
 frontend/npm-debug.log*
 frontend/yarn-error.log*
 frontend/.pnpm-debug.log*
-
+DEPLOY.md
+.claude
 # --- Entorno y Secretos ---
 .env
 .env.local
