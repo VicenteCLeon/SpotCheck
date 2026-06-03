@@ -25,6 +25,7 @@ frontend/.pnpm-debug.log*
 DEPLOY.md
 CONTEXT.txt
 deploy/
+supabase/
 .claude
 # --- Entorno y Secretos ---
 .env
