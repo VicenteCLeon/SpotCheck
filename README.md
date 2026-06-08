@@ -1,6 +1,6 @@
-# SpotCheck — Monitor de Aforo PUCV
+# SpotCheck — Monitor de Aforo 
 
-Sistema de monitoreo de aforo universitario en tiempo real. Detecta personas mediante YOLOv8 en cámaras IP o USB y muestra el estado en un dashboard web con alertas automáticas por email.
+Sistema de monitoreo de aforo en tiempo real. Detecta personas mediante YOLOv8 en cámaras IP o USB y muestra el estado en un dashboard web con alertas automáticas por email.
 
 ---
 
@@ -11,7 +11,7 @@ Sistema de monitoreo de aforo universitario en tiempo real. Detecta personas med
 | Backend | Python 3.12 · FastAPI · YOLOv8 (ultralytics) · OpenCV |
 | Frontend | React 19 · TypeScript · Vite · Tailwind CSS v4 |
 | Base de datos | Supabase (PostgreSQL) |
-| Auth | Google OAuth — solo `@mail.pucv.cl` + JWT propio (8h) |
+| Auth | Google OAuth + JWT propio (8h) |
 | Producción | nginx + Let's Encrypt · Vercel (frontend) |
 
 ---
@@ -54,7 +54,7 @@ SMTP_PORT=587
 SMTP_USER=tucuenta@gmail.com
 SMTP_PASSWORD=xxxx-xxxx-xxxx-xxxx
 ALERT_FROM=tucuenta@gmail.com
-ALERT_RECIPIENTS=responsable@mail.pucv.cl
+ALERT_RECIPIENTS=responsable@mail.cl
 ```
 
 ### `frontend/.env`
@@ -150,7 +150,7 @@ MonitorDeAforo-preview-/
 ├── backend/
 │   ├── main.py            # FastAPI: cámaras, auth, alertas
 │   ├── requirements.txt
-│   ├── .env               # NO subir a git
+│   ├── .env               # 
 │   └── .env.example
 ├── frontend/
 │   ├── src/
@@ -159,7 +159,7 @@ MonitorDeAforo-preview-/
 │   │   ├── types.ts
 │   │   ├── data.tsx       # Utilidades puras
 │   │   └── components/
-│   ├── .env               # NO subir a git
+│   ├── .env               #
 │   └── .env.example
 ├── deploy/
 │   ├── nginx.conf
