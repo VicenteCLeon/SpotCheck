@@ -3,13 +3,14 @@ import type { Faculty, DayPoint, ActivityEntry } from "./types";
 import { statusOf, fmt, clockNow } from "./data";
 import {
   fetchCameras,
+  fetchLogs,
   streamUrl,
   fetchHourlyOccupancy,
   UnauthorizedError,
   isTokenExpired,
   parseSessionPayload,
 } from "./api";
-import type { CameraDTO } from "./api";
+import type { CameraDTO, LogEntry } from "./api";
 import TopBar from "./components/TopBar";
 import KpiCard from "./components/KpiCard";
 import FacultyCard from "./components/FacultyCard";
@@ -18,6 +19,8 @@ import ActivityLog from "./components/ActivityLog";
 import Login from "./components/Login";
 import AdminPanel from "./components/AdminPanel";
 import LegalNotice, { RETENTION_MONTHS } from "./components/LegalNotice";
+import CampusMap from "./components/CampusMap";
+import LogViewer from "./components/LogViewer";
 
 const WARN_T = 60;
 const DANGER_T = 85;
@@ -52,11 +55,24 @@ export default function App() {
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [totalSpark, setTotalSpark] = useState<number[]>([]);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [logsOpen, setLogsOpen] = useState(false);
 
   // Historial real de conteos por cámara (no dispara re-renders)
   const historyRef = useRef<Map<string, number[]>>(new Map());
   // Capacidad total actualizada en cada poll (para el gráfico histórico)
   const totalCapRef = useRef<number>(0);
+
+  // Suscripciones de notificaciones por cámara (P10)
+  const [subscriptions, setSubscriptions] = useState<Set<string>>(() => {
+    try {
+      const s = localStorage.getItem("monitor-aforo-notifs");
+      return s ? new Set(JSON.parse(s)) : new Set<string>();
+    } catch { return new Set<string>(); }
+  });
+  const subscriptionsRef = useRef<Set<string>>(subscriptions);
+  useEffect(() => { subscriptionsRef.current = subscriptions; }, [subscriptions]);
+  const pendingNotifRef = useRef<string[]>([]);
 
   // ── Restaurar sesión desde localStorage ────────────────────────────────────
   useEffect(() => {
@@ -85,6 +101,20 @@ export default function App() {
     setLoading(true);
     if (reason) setConnError(reason);
     else setConnError(null);
+  }, []);
+
+  // ── Notificaciones de browser por cámara (P10) ────────────────────────────
+  const toggleSubscription = useCallback(async (camId: string) => {
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      await Notification.requestPermission();
+    }
+    setSubscriptions((prev) => {
+      const next = new Set(prev);
+      if (next.has(camId)) next.delete(camId);
+      else next.add(camId);
+      localStorage.setItem("monitor-aforo-notifs", JSON.stringify([...next]));
+      return next;
+    });
   }, []);
 
   // ── Reloj ──────────────────────────────────────────────────────────────────
@@ -192,6 +222,9 @@ export default function App() {
                     kind: "ok",
                     text: <span><b>{f.name}</b> volvió a nivel normal</span>,
                   });
+                  if (subscriptionsRef.current.has(f.id)) {
+                    pendingNotifRef.current.push(f.name);
+                  }
                 }
               }
             }
@@ -208,6 +241,16 @@ export default function App() {
         if (nextEvents.length > 0) {
           setActivity((prev) => [...nextEvents, ...prev].slice(0, 8));
         }
+
+        if (pendingNotifRef.current.length > 0 && typeof Notification !== "undefined" && Notification.permission === "granted") {
+          for (const name of pendingNotifRef.current) {
+            new Notification(`${name} disponible`, {
+              body: "El espacio volvió a un nivel de ocupación normal.",
+            });
+          }
+          pendingNotifRef.current = [];
+        }
+
         setConnError(null);
       } catch (err) {
         if (cancelled) return;
@@ -228,6 +271,23 @@ export default function App() {
       clearInterval(id);
     };
   }, [sessionToken, handleLogout]);
+
+  // ── Logs del sistema (solo admin, P15) ────────────────────────────────────
+  useEffect(() => {
+    if (!sessionToken || userRole !== "admin") return;
+    let cancelled = false;
+
+    async function loadLogs() {
+      try {
+        const data = await fetchLogs(sessionToken!);
+        if (!cancelled) setLogs(data);
+      } catch { /* silently ignore */ }
+    }
+
+    loadLogs();
+    const id = setInterval(loadLogs, 10_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [sessionToken, userRole]);
 
   // ── Histórico desde Supabase ───────────────────────────────────────────────
   useEffect(() => {
@@ -314,6 +374,12 @@ export default function App() {
           </div>
         )}
 
+        {faculties.length > 0 && (
+          <div className="mt-3">
+            <CampusMap faculties={faculties} warnT={WARN_T} dangerT={DANGER_T} />
+          </div>
+        )}
+
         <div className="mt-3">
           <button
             type="button"
@@ -387,7 +453,16 @@ export default function App() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
             {faculties.map((f) => (
-              <FacultyCard key={f.id} f={f} warnT={WARN_T} dangerT={DANGER_T} semaforoStyle={SEMAFORO_STYLE} showSpark={SHOW_SPARK} />
+              <FacultyCard
+                key={f.id}
+                f={f}
+                warnT={WARN_T}
+                dangerT={DANGER_T}
+                semaforoStyle={SEMAFORO_STYLE}
+                showSpark={SHOW_SPARK}
+                subscribed={subscriptions.has(f.id)}
+                onToggleNotify={() => toggleSubscription(f.id)}
+              />
             ))}
           </div>
         )}
@@ -417,6 +492,33 @@ export default function App() {
             <ActivityLog entries={activity} />
           </div>
         </div>
+
+        {userRole === "admin" && (
+          <div className="mt-2.5 bg-surface border border-line rounded-[14px]">
+            <button
+              type="button"
+              onClick={() => setLogsOpen((v) => !v)}
+              className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left hover:bg-surface-2 rounded-[14px] transition-colors"
+            >
+              <span className="text-[13px] font-semibold">Logs del sistema</span>
+              <div className="flex items-center gap-2 text-ink-3 text-[11px]">
+                <span>{logs.length} entradas</span>
+                <svg
+                  width="14" height="14" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                  className={`transition-transform duration-200 ${logsOpen ? "rotate-180" : ""}`}
+                >
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </div>
+            </button>
+            {logsOpen && (
+              <div className="px-4 pb-4 border-t border-line">
+                <LogViewer entries={logs} />
+              </div>
+            )}
+          </div>
+        )}
 
         <footer className="mt-6 pt-4 border-t border-line text-[11px] text-ink-4 flex flex-wrap items-center justify-between gap-2">
           <span>

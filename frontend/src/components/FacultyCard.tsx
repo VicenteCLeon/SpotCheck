@@ -9,9 +9,11 @@ interface FacultyCardProps {
   dangerT: number;
   semaforoStyle: SemaforoStyle;
   showSpark: boolean;
+  subscribed?: boolean;
+  onToggleNotify?: () => void;
 }
 
-export default function FacultyCard({ f, warnT, dangerT, semaforoStyle, showSpark }: FacultyCardProps) {
+export default function FacultyCard({ f, warnT, dangerT, semaforoStyle, showSpark, subscribed, onToggleNotify }: FacultyCardProps) {
   const pct = f.cap > 0 ? Math.round((f.occ / f.cap) * 100) : 0;
   const status = statusOf(pct, warnT, dangerT);
   const delta = f.delta ?? 0;
@@ -101,10 +103,32 @@ export default function FacultyCard({ f, warnT, dangerT, semaforoStyle, showSpar
           <span className="text-ink-4">·</span>
           <span>{online ? "actualizado en vivo" : "desconectada"}</span>
         </div>
-        {/* Sparkline real — aparece después de 2+ lecturas, crece hasta ~48s de historial */}
-        {showSpark && spark.length >= 2 && (
-          <Sparkline data={spark} color={sparkColor} />
-        )}
+        <div className="flex items-center gap-2">
+          {onToggleNotify && (
+            <button
+              type="button"
+              onClick={onToggleNotify}
+              title={subscribed ? "Desactivar notificación" : "Notificarme cuando esté disponible"}
+              className={`p-0.5 rounded transition-colors hover:text-ink-1 ${subscribed ? "text-warn" : "text-ink-4"}`}
+            >
+              {subscribed ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+              ) : (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+              )}
+            </button>
+          )}
+          {/* Sparkline real — aparece después de 2+ lecturas */}
+          {showSpark && spark.length >= 2 && (
+            <Sparkline data={spark} color={sparkColor} />
+          )}
+        </div>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import os
 import re
 import smtplib
 import ssl
+from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
@@ -30,6 +31,19 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Buffer en memoria para el visor de logs del frontend (últimas 200 entradas)
+LOG_BUFFER: deque = deque(maxlen=200)
+
+class _MemHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord):
+        LOG_BUFFER.append({
+            "ts": datetime.fromtimestamp(record.created).strftime("%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "msg": record.getMessage(),
+        })
+
+logger.addHandler(_MemHandler())
 
 # ─────────────────────────────────────────────
 # CONFIGURACIÓN
@@ -940,6 +954,12 @@ async def counter(cam_id: str, _user: dict = Depends(require_auth)):
     w = CAMERAS[cam_id]
     return {"id": w.id, "name": w.name, "count": w.count,
             "online": w.online, "device": DEVICE}
+
+
+@app.get("/api/logs")
+async def get_logs(_admin: dict = Depends(require_admin)):
+    """Últimas entradas del log (solo admin). Más reciente primero."""
+    return list(reversed(LOG_BUFFER))
 
 
 @app.get("/health")

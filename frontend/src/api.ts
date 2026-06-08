@@ -186,6 +186,18 @@ export function parseSessionPayload(token: string): SessionPayload | null {
     }
 }
 
+// ── Logs del sistema (solo admin) ─────────────────────────────────────────────
+export interface LogEntry {
+    ts: string;
+    level: "INFO" | "WARNING" | "ERROR";
+    msg: string;
+}
+
+export async function fetchLogs(token: string): Promise<LogEntry[]> {
+    const res = await authFetch(`${API_BASE}/api/logs`, token);
+    return res.json();
+}
+
 export function isTokenExpired(token: string): boolean {
     const payload = parseSessionPayload(token);
     if (!payload || payload.exp === 0) return true;
