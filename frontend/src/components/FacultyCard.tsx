@@ -5,6 +5,7 @@ import Sparkline from "./Sparkline";
 
 interface FacultyCardProps {
   f: Faculty;
+  label?: string;
   warnT: number;
   dangerT: number;
   semaforoStyle: SemaforoStyle;
@@ -13,7 +14,7 @@ interface FacultyCardProps {
   onToggleNotify?: () => void;
 }
 
-export default function FacultyCard({ f, warnT, dangerT, semaforoStyle, showSpark, subscribed, onToggleNotify }: FacultyCardProps) {
+export default function FacultyCard({ f, label, warnT, dangerT, semaforoStyle, showSpark, subscribed, onToggleNotify }: FacultyCardProps) {
   const pct = f.cap > 0 ? Math.round((f.occ / f.cap) * 100) : 0;
   const status = statusOf(pct, warnT, dangerT);
   const delta = f.delta ?? 0;
@@ -52,7 +53,14 @@ export default function FacultyCard({ f, warnT, dangerT, semaforoStyle, showSpar
           </span>
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="m-0 text-[13.5px] font-semibold tracking-tight truncate">{f.name}</h3>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <h3 className="m-0 text-[13.5px] font-semibold tracking-tight truncate">{f.name}</h3>
+            {label && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-ink/8 text-ink-3 border border-line shrink-0">
+                {label}
+              </span>
+            )}
+          </div>
           <div className="text-[11px] text-ink-3 mt-0.5 truncate">{f.building}</div>
           <div className="text-[10.5px] text-ink-4 mt-0.5 font-mono flex items-center gap-1.5">
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

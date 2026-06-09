@@ -13,10 +13,10 @@ from conftest import FakeResp
 # ─────────────────────────────────────────────
 @pytest.mark.parametrize("count,cap,expected", [
     (0, 10, "ok"),
-    (5, 10, "ok"),       # 50% < 60
-    (6, 10, "warn"),     # 60% == WARN_PCT
-    (8, 10, "warn"),     # 80% < 85
-    (9, 10, "danger"),   # 90% >= DANGER_PCT
+    (3, 10, "ok"),       # 30% < 40
+    (4, 10, "warn"),     # 40% == WARN_PCT
+    (7, 10, "warn"),     # 70% < 75
+    (8, 10, "danger"),   # 80% >= DANGER_PCT
     (10, 10, "danger"),
     (3, 0, "ok"),        # capacidad 0 → ok (evita división por cero)
 ])

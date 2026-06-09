@@ -78,8 +78,8 @@ export default function CampusMap({ faculties, warnT, dangerT }: Props) {
             ) : (
                 <GoogleMap
                     mapContainerStyle={{ height: 300, width: "100%" }}
-                    defaultCenter={center}
-                    defaultZoom={MAP_ZOOM}
+                    center={center}
+                    zoom={MAP_ZOOM}
                     options={{ scrollwheel: true }}
                     onClick={() => setSelected(null)}
                 >
@@ -97,11 +97,11 @@ export default function CampusMap({ faculties, warnT, dangerT }: Props) {
                                 <div
                                     onClick={(e) => { e.stopPropagation(); setSelected(f.id); }}
                                     style={{
-                                        width: 36,
-                                        height: 36,
+                                        width: 20,
+                                        height: 20,
                                         borderRadius: "50%",
                                         background: color,
-                                        border: "3px solid #fff",
+                                        border: "2px solid #fff",
                                         cursor: "pointer",
                                         transform: "translate(-50%, -50%)",
                                         boxShadow: "0 2px 8px rgba(0,0,0,0.35)",

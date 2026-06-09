@@ -21,9 +21,10 @@ import AdminPanel from "./components/AdminPanel";
 import LegalNotice, { RETENTION_MONTHS } from "./components/LegalNotice";
 import CampusMap from "./components/CampusMap";
 import LogViewer from "./components/LogViewer";
+import { CAMERA_LABELS } from "./mapConfig";
 
-const WARN_T = 60;
-const DANGER_T = 85;
+const WARN_T = 40;
+const DANGER_T = 75;
 const SEMAFORO_STYLE = "tower" as const;
 const SHOW_SPARK = true;
 const POLL_MS = 2000;
@@ -346,8 +347,9 @@ export default function App() {
   const overallStatus = statusOf(overallPct, WARN_T, DANGER_T);
 
   return (
-    <div className="min-h-screen bg-bg">
-      <div className="px-3 pt-3 pb-[88px] md:px-7 md:pt-5 md:pb-10 max-w-[1440px] mx-auto">
+    <div className="relative min-h-screen bg-bg overflow-hidden">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgb(68,128,207),transparent_55%),radial-gradient(circle_at_bottom_right,rgba(120,170,255,0.25),transparent_55%)] pointer-events-none" />
+      <div className="relative z-10 px-3 pt-3 pb-[88px] md:px-7 md:pt-5 md:pb-10 max-w-[1440px] mx-auto">
 
         <TopBar
           now={now}
@@ -439,9 +441,9 @@ export default function App() {
               <div className="text-ink-3 text-[11px] md:text-[12px] mt-0.5">refresco cada 2 s</div>
             </div>
             <div className="flex gap-3 text-[11px] text-ink-3 items-center">
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-[2px] bg-ok" /> Normal</span>
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-[2px] bg-warn" /> Atención</span>
-              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-[2px] bg-danger" /> Crítico</span>
+              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-[2px] bg-ok" /> Disponible</span>
+              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-[2px] bg-warn" /> Moderado</span>
+              <span className="inline-flex items-center gap-1.5"><span className="w-2 h-2 rounded-[2px] bg-danger" /> Lleno</span>
             </div>
           </div>
         </div>
@@ -456,6 +458,7 @@ export default function App() {
               <FacultyCard
                 key={f.id}
                 f={f}
+                label={CAMERA_LABELS[f.id]}
                 warnT={WARN_T}
                 dangerT={DANGER_T}
                 semaforoStyle={SEMAFORO_STYLE}
@@ -467,22 +470,24 @@ export default function App() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-2.5 mt-2.5">
-          <div className="bg-surface border border-line rounded-[14px] px-4 py-4">
-            <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
-              <div>
-                <h3 className="m-0 text-[13px] md:text-[13.5px] font-semibold">Ocupación del campus · histórico</h3>
-                <div className="text-ink-3 text-[11px] mt-0.5 hidden sm:block">Cada 10 min · últimas 6 h · datos en tiempo real</div>
+        <div className={`grid grid-cols-1 gap-2.5 mt-2.5 ${userRole === "admin" ? "lg:grid-cols-[2fr_1fr]" : ""}`}>
+          {userRole === "admin" && (
+            <div className="bg-surface border border-line rounded-[14px] px-4 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
+                <div>
+                  <h3 className="m-0 text-[13px] md:text-[13.5px] font-semibold">Ocupación del campus · histórico</h3>
+                  <div className="text-ink-3 text-[11px] mt-0.5 hidden sm:block">Cada 10 min · últimas 6 h · datos en tiempo real</div>
+                </div>
               </div>
+              {dayCurve.length >= 2 ? (
+                <DayChart data={dayCurve} warnT={WARN_T} dangerT={DANGER_T} />
+              ) : (
+                <div className="h-[200px] flex items-center justify-center text-center text-ink-3 text-[12px] px-4">
+                  Recopilando datos… el gráfico se dibuja cuando haya registros de al menos 2 horas distintas.
+                </div>
+              )}
             </div>
-            {dayCurve.length >= 2 ? (
-              <DayChart data={dayCurve} warnT={WARN_T} dangerT={DANGER_T} />
-            ) : (
-              <div className="h-[200px] flex items-center justify-center text-center text-ink-3 text-[12px] px-4">
-                Recopilando datos… el gráfico se dibuja cuando haya registros de al menos 2 horas distintas.
-              </div>
-            )}
-          </div>
+          )}
 
           <div className="bg-surface border border-line rounded-[14px] px-4 py-4">
             <div className="flex items-center justify-between mb-3">

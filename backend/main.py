@@ -186,8 +186,8 @@ ALERT_TO      = [e.strip() for e in os.getenv("ALERT_RECIPIENTS", "").split(",")
 ALERTS_ENABLED = bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD and ALERT_TO)
 
 # Umbrales de ocupación — deben coincidir con el frontend (App.tsx: WARN_T, DANGER_T)
-WARN_PCT   = 60   # % → zona ámbar
-DANGER_PCT = 85   # % → zona crítica
+WARN_PCT   = 40   # % → zona ámbar
+DANGER_PCT = 75   # % → zona crítica
 
 # Ventana horaria de alertas (hora local del servidor)
 ALERT_HOUR_START = (13, 30)  # 13:30
