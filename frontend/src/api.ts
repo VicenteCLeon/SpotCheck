@@ -82,6 +82,7 @@ async function authFetch(url: string, token: string, options: RequestInit = {}):
         headers: {
             ...(options.headers ?? {}),
             Authorization: `Bearer ${token}`,
+            "ngrok-skip-browser-warning": "true",
         },
     });
     if (res.status === 401) throw new UnauthorizedError();
@@ -111,6 +112,7 @@ async function mutate(url: string, token: string, method: string, body?: unknown
         headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "true",
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -162,7 +164,10 @@ export async function fetchHourlyOccupancy(): Promise<HourPoint[]> {
 export async function verifyGoogleToken(idToken: string): Promise<GoogleAuthResult> {
     const res = await fetch(`${API_BASE}/api/auth/google`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+            "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "true",
+        },
         body: JSON.stringify({ id_token: idToken }),
     });
     if (res.status === 403) throw new Error("DOMAIN_NOT_ALLOWED");
