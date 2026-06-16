@@ -1,0 +1,42 @@
+# DigitalOcean App Platform — SpotCheck frontend
+#
+# DO lee este archivo automáticamente cuando conectas el repo.
+# Los valores de "envs" los sobreescribes en el panel de DO (Settings →
+# Environment Variables) para no guardar secretos en git.
+#
+# Documentación: https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+
+name: spotcheck
+region: nyc   # New York — más cercano a Chile que los europeos
+
+static_sites:
+  - name: frontend
+    source_dir: frontend
+    github:
+      branch: main
+      deploy_on_push: true   # redeploy automático en cada push a main
+    build_command: npm run build
+    output_dir: dist
+
+    # SPA: cualquier ruta que no exista en disco sirve index.html
+    # (necesario para que recarga de página no dé 404)
+    catchall_document: index.html
+
+    # Variables de entorno — cámbiolas en el panel de DO, no aquí
+    # (los valores de abajo son placeholders; DO los sobreescribe)
+    envs:
+      - key: VITE_API_BASE
+        value: REEMPLAZAR_CON_URL_NGROK   # ej: https://xxxx.ngrok-free.app
+        scope: BUILD_TIME
+      - key: VITE_GOOGLE_CLIENT_ID
+        value: REEMPLAZAR
+        scope: BUILD_TIME
+      - key: VITE_SUPABASE_URL
+        value: REEMPLAZAR
+        scope: BUILD_TIME
+      - key: VITE_SUPABASE_ANON_KEY
+        value: REEMPLAZAR
+        scope: BUILD_TIME
+      - key: VITE_GOOGLE_MAPS_KEY
+        value: REEMPLAZAR
+        scope: BUILD_TIME

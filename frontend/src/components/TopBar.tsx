@@ -6,10 +6,11 @@ interface TopBarProps {
   overallStatus: Status;
   userRole?: "admin" | "viewer";
   onManageCameras?: () => void;
+  onOpenLive?: () => void;
   onLogout: () => void;
 }
 
-export default function TopBar({ now, overallStatus, userRole, onManageCameras, onLogout }: TopBarProps) {
+export default function TopBar({ now, overallStatus, userRole, onManageCameras, onOpenLive, onLogout }: TopBarProps) {
   const liveColor =
     overallStatus === "danger" ? "var(--color-danger)" : overallStatus === "warn" ? "var(--color-warn)" : "var(--color-ok)";
 
@@ -37,6 +38,17 @@ export default function TopBar({ now, overallStatus, userRole, onManageCameras, 
             <span className="inline-flex items-center gap-1 px-2 py-[3px] rounded-full bg-ink text-surface text-[10px] font-semibold tracking-widest uppercase select-none">
               Admin
             </span>
+            <button
+              type="button"
+              aria-label="Camaras en vivo"
+              title="Cámaras en vivo"
+              onClick={onOpenLive}
+              className="inline-flex w-[30px] h-[30px] rounded-lg border border-line bg-surface items-center justify-center text-ink-2 transition-colors hover:border-line-strong hover:text-ink active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/40"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 7l-7 5 7 5V7z" /><rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+              </svg>
+            </button>
             <button
               type="button"
               aria-label="Gestionar camaras"

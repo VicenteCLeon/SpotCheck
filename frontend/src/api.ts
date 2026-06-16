@@ -170,6 +170,44 @@ export async function verifyGoogleToken(idToken: string): Promise<GoogleAuthResu
     return res.json();
 }
 
+// ── Pasarela de pago (Mercado Pago) — compra de acceso admin ──────────────────
+export interface BillingStatus {
+    enabled: boolean;       // pasarela configurada en el backend
+    price: number;          // precio del acceso admin
+    currency: string;       // p. ej. "CLP"
+    role: string;           // rol actual del usuario
+    eligible: boolean;      // true si puede comprar (viewer @pucv.cl)
+}
+
+export interface ConfirmResult {
+    status: string;         // estado del pago en Mercado Pago
+    granted: boolean;       // true si el rol se subió a admin
+    token?: string;         // nuevo JWT con rol admin (si granted)
+    role?: string;
+}
+
+/** Estado de la pasarela y elegibilidad del usuario actual. */
+export async function fetchBillingStatus(token: string): Promise<BillingStatus> {
+    const res = await authFetch(`${API_BASE}/api/billing/status`, token);
+    return res.json();
+}
+
+/** Crea la preferencia de Checkout Pro y devuelve la URL del checkout. */
+export async function createBillingPreference(token: string): Promise<string> {
+    const data = (await mutate(`${API_BASE}/api/billing/create-preference`, token, "POST")) as {
+        init_point?: string;
+    };
+    if (!data?.init_point) throw new Error("Mercado Pago no devolvió una URL de pago.");
+    return data.init_point;
+}
+
+/** Verifica un pago tras el redirect y, si está aprobado, devuelve el JWT admin. */
+export async function confirmBillingPayment(token: string, paymentId: string): Promise<ConfirmResult> {
+    return (await mutate(`${API_BASE}/api/billing/confirm`, token, "POST", {
+        payment_id: paymentId,
+    })) as ConfirmResult;
+}
+
 // ── Utilidades JWT (decodificación sin verificar firma — solo lectura de claims) ─
 export function parseSessionPayload(token: string): SessionPayload | null {
     try {

@@ -6,6 +6,8 @@ import {
   fetchLogs,
   streamUrl,
   fetchHourlyOccupancy,
+  fetchBillingStatus,
+  confirmBillingPayment,
   UnauthorizedError,
   isTokenExpired,
   parseSessionPayload,
@@ -18,9 +20,11 @@ import DayChart from "./components/DayChart";
 import ActivityLog from "./components/ActivityLog";
 import Login from "./components/Login";
 import AdminPanel from "./components/AdminPanel";
+import LivePreview from "./components/LivePreview";
 import LegalNotice, { RETENTION_MONTHS } from "./components/LegalNotice";
 import CampusMap from "./components/CampusMap";
 import LogViewer from "./components/LogViewer";
+import UpgradeAdmin from "./components/UpgradeAdmin";
 import { CAMERA_LABELS } from "./mapConfig";
 
 const WARN_T = 40;
@@ -52,12 +56,17 @@ export default function App() {
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<"admin" | "viewer">("viewer");
   const [adminOpen, setAdminOpen] = useState(false);
+  const [liveOpen, setLiveOpen] = useState(false);
   const [legalOpen, setLegalOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [totalSpark, setTotalSpark] = useState<number[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [logsOpen, setLogsOpen] = useState(false);
+  // Pasarela de pago: oferta de acceso admin para viewers @pucv.cl elegibles
+  const [billing, setBilling] = useState<{ price: number; currency: string } | null>(null);
+  const [upgradeMsg, setUpgradeMsg] = useState<string | null>(null);
+  const billingHandledRef = useRef(false);
 
   // Historial real de conteos por cámara (no dispara re-renders)
   const historyRef = useRef<Map<string, number[]>>(new Map());
@@ -321,6 +330,65 @@ export default function App() {
     };
   }, [sessionToken]);
 
+  // ── Elegibilidad de compra de acceso admin (solo viewers) ──────────────────
+  useEffect(() => {
+    if (!sessionToken || userRole === "admin") {
+      setBilling(null);
+      return;
+    }
+    let cancelled = false;
+    fetchBillingStatus(sessionToken)
+      .then((s) => {
+        if (!cancelled) setBilling(s.eligible ? { price: s.price, currency: s.currency } : null);
+      })
+      .catch(() => { /* sin pasarela o sin conexión: no mostrar oferta */ });
+    return () => { cancelled = true; };
+  }, [sessionToken, userRole]);
+
+  // ── Retorno desde Mercado Pago (back_url ?billing=...) ─────────────────────
+  useEffect(() => {
+    if (!sessionToken || billingHandledRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const billingResult = params.get("billing");
+    if (!billingResult) return;
+
+    billingHandledRef.current = true;
+    // Limpia los query params para no reprocesar al re-renderizar/recargar
+    window.history.replaceState({}, "", window.location.pathname);
+
+    if (billingResult !== "success") {
+      setUpgradeMsg(
+        billingResult === "pending"
+          ? "Tu pago quedó pendiente. El acceso se activará cuando se apruebe."
+          : "El pago no se completó. Puedes intentarlo de nuevo."
+      );
+      return;
+    }
+
+    const paymentId = params.get("payment_id") || params.get("collection_id");
+    if (!paymentId) {
+      setUpgradeMsg("No recibimos el identificador del pago. Si se te cobró, recarga en unos minutos.");
+      return;
+    }
+
+    (async () => {
+      try {
+        const result = await confirmBillingPayment(sessionToken, paymentId);
+        if (result.granted && result.token) {
+          localStorage.setItem(AUTH_STORAGE_KEY, result.token);
+          setSessionToken(result.token);
+          setUserRole("admin");
+          setBilling(null);
+          setUpgradeMsg("¡Listo! Ya tienes acceso de administrador.");
+        } else {
+          setUpgradeMsg(`Pago en estado «${result.status}». El acceso se activará al aprobarse.`);
+        }
+      } catch {
+        setUpgradeMsg("No pudimos confirmar el pago. Si se te cobró, recarga la página en unos minutos.");
+      }
+    })();
+  }, [sessionToken]);
+
   // ── Login ──────────────────────────────────────────────────────────────────
   if (!sessionToken) {
     return (
@@ -356,6 +424,7 @@ export default function App() {
           overallStatus={overallStatus}
           userRole={userRole}
           onManageCameras={() => setAdminOpen(true)}
+          onOpenLive={() => setLiveOpen(true)}
           onLogout={() => handleLogout()}
         />
 
@@ -367,6 +436,14 @@ export default function App() {
           />
         )}
 
+        {liveOpen && sessionToken && userRole === "admin" && (
+          <LivePreview
+            token={sessionToken}
+            onClose={() => setLiveOpen(false)}
+            onSessionExpired={() => handleLogout("Sesión inválida. Vuelve a iniciar sesión.")}
+          />
+        )}
+
         {connError && (
           <div className="mt-3 px-3.5 py-2.5 rounded-[10px] border border-danger bg-danger-bg text-danger text-[12px] font-medium flex items-center gap-2">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -374,6 +451,29 @@ export default function App() {
             </svg>
             {connError} · reintentando…
           </div>
+        )}
+
+        {upgradeMsg && (
+          <div className="mt-3 px-3.5 py-2.5 rounded-[10px] border border-line bg-surface-2 text-ink-2 text-[12px] font-medium flex items-center justify-between gap-2">
+            <span>{upgradeMsg}</span>
+            <button
+              type="button"
+              onClick={() => setUpgradeMsg(null)}
+              aria-label="Cerrar"
+              className="text-ink-3 hover:text-ink shrink-0 text-[14px] leading-none"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {userRole !== "admin" && billing && sessionToken && (
+          <UpgradeAdmin
+            token={sessionToken}
+            price={billing.price}
+            currency={billing.currency}
+            onError={(msg) => setUpgradeMsg(msg)}
+          />
         )}
 
         {faculties.length > 0 && (

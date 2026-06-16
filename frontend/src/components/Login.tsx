@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { verifyGoogleToken } from "../api";
 import LegalNotice from "./LegalNotice";
 
-const ALLOWED_DOMAIN = "@mail.pucv.cl";
+const ALLOWED_DOMAINS = ["@mail.pucv.cl", "@pucv.cl"];
 
 interface LoginProps {
   /** Recibe el JWT de sesión y el correo del usuario autenticado. */
@@ -38,7 +38,7 @@ export default function Login({ onSuccess }: LoginProps) {
             onSuccess(result.token, result.email);
           } catch (err: unknown) {
             if (err instanceof Error && err.message === "DOMAIN_NOT_ALLOWED") {
-              setError(`Solo se permiten correos ${ALLOWED_DOMAIN}.`);
+              setError(`Solo se permiten correos ${ALLOWED_DOMAINS.join(" o ")}`);
             } else {
               setError("No se pudo verificar el correo con Google. Intenta de nuevo.");
             }
@@ -91,7 +91,7 @@ export default function Login({ onSuccess }: LoginProps) {
 
             <div className="space-y-4">
               <div className="text-[12px] text-ink-3">
-                Debes iniciar sesión con un correo <span className="font-mono">{ALLOWED_DOMAIN}</span> válido.
+                Debes iniciar sesión con un correo <span className="font-mono">{ALLOWED_DOMAINS.join(" o ")}</span> válido.
               </div>
               <div className="flex justify-center">
                 <div ref={buttonRef} />

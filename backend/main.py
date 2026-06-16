@@ -4,6 +4,8 @@ import logging
 import threading
 import os
 import re
+import hmac
+import hashlib
 import smtplib
 import ssl
 from collections import deque
@@ -72,8 +74,31 @@ JWT_SECRET = os.getenv("JWT_SECRET", "CAMBIA-ESTO-EN-PRODUCCION")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 8
 
-ALLOWED_DOMAIN = "@mail.pucv.cl"
+ALLOWED_DOMAINS = ["@mail.pucv.cl", "@pucv.cl"]
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+
+# ─────────────────────────────────────────────
+# MERCADO PAGO — COMPRA DE ACCESO ADMIN
+# ─────────────────────────────────────────────
+# Un usuario con rol "viewer" y correo @pucv.cl puede comprar el acceso de
+# administrador. Tras el pago aprobado, su rol pasa a "admin" en user_roles.
+MP_API_BASE       = "https://api.mercadopago.com"
+MP_ACCESS_TOKEN   = os.getenv("MP_ACCESS_TOKEN", "")          # APP_USR-... (producción)
+MP_WEBHOOK_SECRET = os.getenv("MP_WEBHOOK_SECRET", "")        # firma de notificaciones (opcional pero recomendado)
+ADMIN_PRICE       = int(os.getenv("ADMIN_PRICE_CLP", "5000")) # precio del acceso admin en CLP
+MP_CURRENCY       = os.getenv("MP_CURRENCY", "CLP")
+MP_ENABLED        = bool(MP_ACCESS_TOKEN)
+
+# Solo el dominio institucional exacto @pucv.cl puede comprar admin
+# (excluye @mail.pucv.cl, que es el dominio de estudiantes).
+BILLING_DOMAIN = "@pucv.cl"
+
+# URL base del frontend para las back_urls de Checkout Pro (primer origen permitido).
+FRONTEND_BASE = ALLOWED_ORIGINS[0].strip().rstrip("/") if ALLOWED_ORIGINS else ""
+
+# URL pública del backend (https) para el notification_url del webhook de MP.
+# En desarrollo local no es alcanzable por MP; déjala vacía y usa solo /confirm.
+PUBLIC_BACKEND_URL = os.getenv("PUBLIC_BACKEND_URL", "").strip().rstrip("/")
 
 # Configuración de cámaras por defecto. Se usa como FALLBACK cuando Supabase no
 # está disponible o la tabla "cameras" está vacía. En producción, gestiona las
@@ -251,6 +276,93 @@ def fetch_user_role(email: str) -> str:
         return str(rows[0]["role"]) if rows else "viewer"
     except (ValueError, KeyError, IndexError):
         return "viewer"
+
+
+# ─────────────────────────────────────────────
+# MERCADO PAGO — HELPERS
+# ─────────────────────────────────────────────
+def _mp_request(method: str, path: str, *, json=None, params=None):
+    """Llamada a la REST API de Mercado Pago con el access token (sin SDK,
+    igual que el resto del proyecto). Devuelve el Response de requests."""
+    headers = {
+        "Authorization": f"Bearer {MP_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    return requests.request(
+        method, f"{MP_API_BASE}{path}",
+        headers=headers, json=json, params=params, timeout=10,
+    )
+
+
+def can_buy_admin(email: str, role: str) -> bool:
+    """True si el usuario puede comprar el acceso admin: correo @pucv.cl exacto
+    (no @mail.pucv.cl) y que todavía no sea admin."""
+    return email.lower().endswith(BILLING_DOMAIN) and role != "admin"
+
+
+def grant_admin(email: str, payment_id: str | None = None, amount: float | None = None) -> bool:
+    """Sube el rol del usuario a 'admin' en Supabase (upsert por email) y deja
+    registro de la compra. Idempotente: invocable desde /confirm y desde el
+    webhook sin duplicar efecto. Devuelve True si el rol quedó como admin."""
+    if not SUPABASE_ENABLED:
+        logger.error(f"[BILLING] No se puede otorgar admin a {email}: Supabase desactivado")
+        return False
+
+    # Upsert en user_roles (requiere índice único en 'email'; ver DATABASE.md)
+    res = _supabase_rest(
+        "POST", "user_roles",
+        json={"email": email, "role": "admin"},
+        prefer="resolution=merge-duplicates,return=minimal",
+    )
+    if res.status_code not in (200, 201, 204):
+        logger.error(f"[BILLING] Supabase rechazó el upsert de rol para {email}: "
+                     f"{res.status_code} {res.text}")
+        return False
+
+    # Auditoría de la compra (best-effort: no bloquea el otorgamiento del rol)
+    try:
+        _supabase_rest(
+            "POST", "admin_purchases",
+            json={
+                "email": email,
+                "payment_id": str(payment_id) if payment_id is not None else None,
+                "amount": amount,
+                "currency": MP_CURRENCY,
+                "status": "approved",
+            },
+            prefer="return=minimal",
+        )
+    except Exception as e:
+        logger.warning(f"[BILLING] No se pudo registrar la compra de {email}: {e}")
+
+    logger.info(f"[BILLING] Acceso admin otorgado a {email} (pago {payment_id})")
+    return True
+
+
+def verify_webhook_signature(request: Request, data_id: str) -> bool:
+    """Valida la firma HMAC de la notificación de Mercado Pago (cabecera
+    x-signature + x-request-id). Si no hay MP_WEBHOOK_SECRET configurado, no se
+    puede validar y se rechaza por seguridad. Ver:
+    https://www.mercadopago.cl/developers/es/docs/your-integrations/notifications/webhooks"""
+    if not MP_WEBHOOK_SECRET:
+        return False
+
+    x_signature = request.headers.get("x-signature", "")
+    x_request_id = request.headers.get("x-request-id", "")
+    # x-signature: "ts=<unix>,v1=<hmac_hex>"
+    parts = {}
+    for piece in x_signature.split(","):
+        k, _, v = piece.partition("=")
+        parts[k.strip()] = v.strip()
+    ts, v1 = parts.get("ts"), parts.get("v1")
+    if not ts or not v1:
+        return False
+
+    manifest = f"id:{data_id};request-id:{x_request_id};ts:{ts};"
+    expected = hmac.new(
+        MP_WEBHOOK_SECRET.encode(), manifest.encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, v1)
 
 
 # ─────────────────────────────────────────────
@@ -926,7 +1038,7 @@ async def auth_google(request: Request, payload: GoogleTokenPayload):
     if str(data.get("email_verified")).lower() != "true":
         raise HTTPException(401, "Correo no verificado")
 
-    if not email.endswith(ALLOWED_DOMAIN):
+    if not any(email.endswith(d) for d in ALLOWED_DOMAINS):
         raise HTTPException(403, "Dominio de correo no permitido")
 
     role = fetch_user_role(email)
@@ -945,6 +1057,166 @@ async def auth_google(request: Request, payload: GoogleTokenPayload):
         "picture": data.get("picture"),
         "role": role,
     }
+
+
+# ─────────────────────────────────────────────
+# MERCADO PAGO — COMPRA DE ACCESO ADMIN (endpoints)
+# ─────────────────────────────────────────────
+class PaymentConfirm(BaseModel):
+    payment_id: str
+
+
+@app.get("/api/billing/status")
+async def billing_status(user: dict = Depends(require_auth)):
+    """Indica si el upgrade a admin está disponible para este usuario y su precio.
+    El frontend lo usa para decidir si muestra el botón de compra."""
+    email = (user.get("sub") or "").lower()
+    role = user.get("role", "viewer")
+    return {
+        "enabled": MP_ENABLED,
+        "price": ADMIN_PRICE,
+        "currency": MP_CURRENCY,
+        "role": role,
+        "eligible": MP_ENABLED and can_buy_admin(email, role),
+    }
+
+
+@app.post("/api/billing/create-preference")
+async def create_preference(user: dict = Depends(require_auth)):
+    """Crea una preferencia de Checkout Pro para comprar el acceso admin.
+    Devuelve el init_point (URL del checkout) al que redirige el frontend."""
+    if not MP_ENABLED:
+        raise HTTPException(503, "Pasarela de pago no configurada.")
+    email = (user.get("sub") or "").lower()
+    role = user.get("role", "viewer")
+    if role == "admin":
+        raise HTTPException(409, "Ya tienes acceso de administrador.")
+    if not can_buy_admin(email, role):
+        raise HTTPException(403, "Solo cuentas @pucv.cl pueden adquirir el acceso de administrador.")
+
+    preference = {
+        "items": [{
+            "id": "admin-access",
+            "title": "SpotCheck · Acceso de administrador",
+            "description": "Gestión de cámaras, vista en vivo, logs y gráfico histórico.",
+            "quantity": 1,
+            "currency_id": MP_CURRENCY,
+            "unit_price": ADMIN_PRICE,
+        }],
+        "payer": {"email": email},
+        "external_reference": email,
+        "back_urls": {
+            "success": f"{FRONTEND_BASE}/?billing=success",
+            "failure": f"{FRONTEND_BASE}/?billing=failure",
+            "pending": f"{FRONTEND_BASE}/?billing=pending",
+        },
+        "auto_return": "approved",
+        "metadata": {"email": email, "purpose": "admin_access"},
+    }
+    if PUBLIC_BACKEND_URL:
+        preference["notification_url"] = f"{PUBLIC_BACKEND_URL}/api/billing/webhook"
+
+    try:
+        res = _mp_request("POST", "/checkout/preferences", json=preference)
+    except requests.RequestException as e:
+        logger.error(f"[BILLING] Error creando preferencia MP: {e}")
+        raise HTTPException(502, "No se pudo contactar a Mercado Pago.")
+
+    if res.status_code not in (200, 201):
+        logger.error(f"[BILLING] MP rechazó la preferencia: {res.status_code} {res.text}")
+        raise HTTPException(502, "Mercado Pago rechazó la creación del pago.")
+
+    data = res.json()
+    logger.info(f"[BILLING] Preferencia creada para {email}: {data.get('id')}")
+    return {"init_point": data.get("init_point"), "preference_id": data.get("id")}
+
+
+def _fetch_payment(payment_id: str) -> dict | None:
+    """Consulta un pago en Mercado Pago. Devuelve el dict del pago o None."""
+    try:
+        res = _mp_request("GET", f"/v1/payments/{payment_id}")
+    except requests.RequestException as e:
+        logger.warning(f"[BILLING] No se pudo consultar el pago {payment_id}: {e}")
+        return None
+    if res.status_code != 200:
+        logger.warning(f"[BILLING] MP devolvió {res.status_code} al consultar pago {payment_id}")
+        return None
+    try:
+        return res.json()
+    except ValueError:
+        return None
+
+
+@app.post("/api/billing/confirm")
+async def confirm_payment(payload: PaymentConfirm, user: dict = Depends(require_auth)):
+    """Verifica un pago tras el redirect de Checkout Pro. Si está aprobado y
+    pertenece a este usuario, sube su rol a admin y emite un JWT nuevo."""
+    if not MP_ENABLED:
+        raise HTTPException(503, "Pasarela de pago no configurada.")
+    email = (user.get("sub") or "").lower()
+
+    payment = _fetch_payment(payload.payment_id)
+    if not payment:
+        raise HTTPException(404, "Pago no encontrado.")
+
+    ref = (payment.get("external_reference") or "").lower()
+    if ref != email:
+        raise HTTPException(403, "El pago no corresponde a tu cuenta.")
+
+    if payment.get("status") != "approved":
+        return {"status": payment.get("status"), "granted": False}
+
+    granted = grant_admin(
+        email,
+        payment_id=payment.get("id"),
+        amount=payment.get("transaction_amount"),
+    )
+    if not granted:
+        raise HTTPException(500, "No se pudo activar el acceso de administrador.")
+
+    token = create_session_token(
+        email=email, name=user.get("name"), picture=user.get("picture"), role="admin",
+    )
+    return {"status": "approved", "granted": True, "token": token, "role": "admin"}
+
+
+@app.post("/api/billing/webhook")
+async def billing_webhook(request: Request):
+    """Notificación de Mercado Pago (fuente autoritativa, por si el usuario cierra
+    el navegador antes del redirect). Verifica la firma, consulta el pago y, si
+    está aprobado, otorga el acceso admin. Responde 200 salvo firma inválida."""
+    params = dict(request.query_params)
+    topic = params.get("type") or params.get("topic")
+    data_id = params.get("data.id") or params.get("id")
+    if not data_id:
+        try:
+            body = await request.json()
+            topic = topic or body.get("type")
+            data_id = (body.get("data") or {}).get("id") or body.get("id")
+        except Exception:
+            pass
+
+    if topic and topic != "payment":
+        return {"ok": True, "ignored": topic}
+    if not data_id:
+        return {"ok": True}
+
+    if not verify_webhook_signature(request, str(data_id)):
+        logger.warning(f"[BILLING] Webhook con firma inválida (pago {data_id}) — ignorado")
+        raise HTTPException(401, "Firma inválida")
+
+    payment = _fetch_payment(str(data_id))
+    if not payment:
+        return {"ok": True}
+
+    if payment.get("status") == "approved":
+        email = (payment.get("external_reference") or "").lower()
+        if email.endswith(BILLING_DOMAIN):
+            grant_admin(email, payment_id=payment.get("id"),
+                        amount=payment.get("transaction_amount"))
+        else:
+            logger.warning(f"[BILLING] Pago aprobado con email no elegible: {email}")
+    return {"ok": True}
 
 
 @app.get("/api/counter/{cam_id}")
