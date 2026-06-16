@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchCamerasConfig, streamUrl, UnauthorizedError } from "../api";
 import type { CameraConfigRow } from "../api";
+import MjpegStream from "./MjpegStream";
 
 interface LivePreviewProps {
   token: string;
@@ -92,33 +93,12 @@ export default function LivePreview({ token, onClose, onSessionExpired }: LivePr
               {active.map((r) => (
                 <div key={r.id} className="rounded-xl border border-line overflow-hidden bg-surface-2">
                   <div className="relative aspect-video bg-black">
-                    <img
+                    <MjpegStream
                       key={`${r.id}-${nonce[r.id] ?? 0}`}
                       src={`${streamUrl(r.id, token)}&_=${nonce[r.id] ?? 0}`}
                       alt={`Stream de ${r.name}`}
-                      className="absolute inset-0 w-full h-full object-contain"
-                      onError={(e) => {
-                        const el = e.currentTarget;
-                        el.style.display = "none";
-                        const ph = el.nextElementSibling as HTMLElement | null;
-                        if (ph) ph.style.display = "flex";
-                      }}
+                      onRetry={() => reloadCam(r.id)}
                     />
-                    <div
-                      className="absolute inset-0 hidden flex-col items-center justify-center gap-2 text-ink-4 text-[12px]"
-                    >
-                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                      Sin señal
-                      <button
-                        type="button" onClick={() => reloadCam(r.id)}
-                        className="mt-1 px-2 py-1 rounded-md border border-line text-ink-2 text-[11px] hover:border-line-strong hover:text-ink"
-                      >
-                        Reintentar
-                      </button>
-                    </div>
                   </div>
                   <div className="flex items-center justify-between px-3 py-2">
                     <div className="min-w-0">
