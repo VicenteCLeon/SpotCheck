@@ -25,6 +25,9 @@ frontend/.pnpm-debug.log*
 DEPLOY.md
 CONTEXT.txt
 CLAUDE.md
+DATABASE.md
+DEPLOY-WINDOWS.md
+prueba.md
 deploy/
 supabase/
 .claude
