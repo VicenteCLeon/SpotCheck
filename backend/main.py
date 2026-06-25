@@ -8,9 +8,11 @@ import hmac
 import hashlib
 import smtplib
 import ssl
+import csv
+import io
 from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -18,7 +20,7 @@ import requests
 import numpy as np
 import torch
 from fastapi import FastAPI, HTTPException, Depends, Request, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -1232,6 +1234,238 @@ async def counter(cam_id: str, _user: dict = Depends(require_auth)):
 async def get_logs(_admin: dict = Depends(require_admin)):
     """Últimas entradas del log (solo admin). Más reciente primero."""
     return list(reversed(LOG_BUFFER))
+
+
+# ─────────────────────────────────────────────
+# EXPORTACIÓN DE OCUPACIÓN (CSV / XLSX) — solo admin
+# ─────────────────────────────────────────────
+# El admin descarga el histórico de ocupación por horario y zona para análisis.
+# Lee la tabla 'samples' con la SERVICE KEY (el frontend solo accede a agregados
+# de 6 h vía la RPC recent_occupancy), la cruza con la metadata de cámaras y la
+# entrega como CSV (UTF-8 con BOM, abre directo en Excel) o XLSX (openpyxl).
+EXPORT_MAX_RANGE_DAYS = 92        # span máximo permitido por exportación
+EXPORT_MAX_ROWS       = 1_000_000  # tope de seguridad de filas leídas
+
+
+def _fetch_cameras_meta() -> dict:
+    """Mapa camera_id -> {name, building, capacity} con todas las cámaras
+    conocidas (tabla 'cameras' + workers en memoria), para resolver el nombre de
+    zona incluso de cámaras ya eliminadas que aún tienen muestras."""
+    meta: dict[str, dict] = {}
+    if SUPABASE_ENABLED:
+        res = _supabase_rest("GET", "cameras",
+                             params={"select": "id,name,building,capacity"})
+        if res.status_code == 200:
+            for r in res.json():
+                meta[str(r["id"])] = {
+                    "name": r.get("name") or str(r["id"]),
+                    "building": r.get("building") or "",
+                    "capacity": int(r.get("capacity") or 0),
+                }
+    # Completar con los workers activos (modo fallback o cámaras sin fila en tabla)
+    for w in cameras_snapshot():
+        meta.setdefault(w.id, {"name": w.name, "building": w.building,
+                               "capacity": w.capacity})
+    return meta
+
+
+def _fetch_samples_range(start_iso: str, end_iso: str) -> list[dict]:
+    """Lee 'samples' en [start, end) paginando (PostgREST limita a 1000/req)."""
+    url = f"{SUPABASE_URL}/rest/v1/samples"
+    headers = {
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    }
+    out: list[dict] = []
+    limit, offset = 1000, 0
+    while len(out) < EXPORT_MAX_ROWS:
+        params = [
+            ("select", "camera_id,count,created_at"),
+            ("created_at", f"gte.{start_iso}"),
+            ("created_at", f"lt.{end_iso}"),
+            ("order", "created_at.asc"),
+            ("limit", str(limit)),
+            ("offset", str(offset)),
+        ]
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=20)
+        except Exception as e:
+            raise HTTPException(502, f"No se pudieron leer las muestras de Supabase: {e}")
+        if res.status_code != 200:
+            raise HTTPException(502, f"Supabase rechazó la consulta de muestras: {res.text}")
+        batch = res.json()
+        out.extend(batch)
+        if len(batch) < limit:
+            break
+        offset += limit
+    return out
+
+
+def _parse_ts(raw: str) -> datetime:
+    """created_at de Supabase (UTC) → datetime aware en hora local del servidor,
+    para que las etiquetas de 'hora' coincidan con el horario real del campus."""
+    dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone()
+
+
+def _build_export_rows(samples: list[dict], meta: dict, granularity: str):
+    """Construye (encabezado, filas) según la granularidad:
+      · raw  → una fila por muestra
+      · hour → agregado por (zona, hora): promedio/máx/mín de ocupación
+      · day  → agregado por (zona, día)"""
+    def pct(count, cap):
+        return round((count / cap) * 100, 1) if cap and cap > 0 else ""
+
+    if granularity == "raw":
+        header = ["timestamp_local", "zona_id", "zona", "edificio",
+                  "ocupacion", "aforo", "pct"]
+        data = []
+        for r in samples:
+            cid = str(r.get("camera_id"))
+            m = meta.get(cid, {})
+            cap = int(m.get("capacity") or 0)
+            cnt = int(r.get("count") or 0)
+            dt = _parse_ts(r["created_at"])
+            data.append([dt.strftime("%Y-%m-%d %H:%M:%S"), cid,
+                         m.get("name", cid), m.get("building", ""),
+                         cnt, cap or "", pct(cnt, cap)])
+        return header, data
+
+    # hour | day → agregación por (bucket, zona)
+    buckets: dict = {}
+    for r in samples:
+        cid = str(r.get("camera_id"))
+        cnt = int(r.get("count") or 0)
+        dt = _parse_ts(r["created_at"])
+        b = (dt.replace(minute=0, second=0, microsecond=0) if granularity == "hour"
+             else dt.replace(hour=0, minute=0, second=0, microsecond=0))
+        acc = buckets.get((b, cid))
+        if acc is None:
+            buckets[(b, cid)] = {"sum": cnt, "n": 1, "max": cnt, "min": cnt}
+        else:
+            acc["sum"] += cnt
+            acc["n"] += 1
+            acc["max"] = max(acc["max"], cnt)
+            acc["min"] = min(acc["min"], cnt)
+
+    if granularity == "hour":
+        header = ["fecha", "hora", "zona_id", "zona", "edificio", "muestras",
+                  "ocupacion_prom", "ocupacion_max", "ocupacion_min",
+                  "aforo", "pct_prom", "pct_max"]
+    else:
+        header = ["fecha", "zona_id", "zona", "edificio", "muestras",
+                  "ocupacion_prom", "ocupacion_max", "ocupacion_min",
+                  "aforo", "pct_prom", "pct_max"]
+
+    data = []
+    for (b, cid), acc in sorted(buckets.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        m = meta.get(cid, {})
+        cap = int(m.get("capacity") or 0)
+        avg = round(acc["sum"] / acc["n"], 1)
+        row = [b.strftime("%Y-%m-%d")]
+        if granularity == "hour":
+            row.append(b.strftime("%H:00"))
+        row += [cid, m.get("name", cid), m.get("building", ""),
+                acc["n"], avg, acc["max"], acc["min"],
+                cap or "", pct(avg, cap), pct(acc["max"], cap)]
+        data.append(row)
+    return header, data
+
+
+def _rows_to_csv(header: list, data: list) -> bytes:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    writer.writerows(data)
+    # utf-8-sig añade BOM para que Excel detecte UTF-8 y muestre bien los acentos
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def _rows_to_xlsx(header: list, data: list, title: str) -> bytes:
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(503, "Exportación a Excel no disponible: falta la dependencia 'openpyxl'.")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title[:31]
+    ws.append(header)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in data:
+        ws.append(row)
+    ws.freeze_panes = "A2"
+    # Ancho de columnas aproximado al contenido (muestreando las primeras filas)
+    for i, h in enumerate(header, 1):
+        widest = max([len(str(h))] + [len(str(r[i - 1])) for r in data[:200]])
+        ws.column_dimensions[get_column_letter(i)].width = min(widest + 2, 42)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@app.get("/api/export/occupancy")
+async def export_occupancy(
+    _admin: dict = Depends(require_admin),
+    start: str | None = Query(None, alias="from", description="YYYY-MM-DD (local)"),
+    end: str | None = Query(None, alias="to", description="YYYY-MM-DD (local)"),
+    granularity: str = Query("hour", description="raw | hour | day"),
+    fmt: str = Query("csv", alias="format", description="csv | xlsx"),
+    camera_id: str | None = Query(None, description="Filtra una zona; vacío = todas"),
+):
+    """Descarga el histórico de ocupación por horario y zona (solo admin).
+    Rango por defecto: últimos 7 días. Las fechas se interpretan en hora local."""
+    if not SUPABASE_ENABLED:
+        raise HTTPException(503, "La exportación requiere Supabase: sin persistencia no hay datos históricos.")
+    if granularity not in ("raw", "hour", "day"):
+        raise HTTPException(422, "granularity debe ser 'raw', 'hour' o 'day'.")
+    if fmt not in ("csv", "xlsx"):
+        raise HTTPException(422, "format debe ser 'csv' o 'xlsx'.")
+
+    today = datetime.now().date()
+    try:
+        to_date = date.fromisoformat(end) if end else today
+        from_date = date.fromisoformat(start) if start else (to_date - timedelta(days=6))
+    except ValueError:
+        raise HTTPException(422, "Fechas inválidas; usa el formato YYYY-MM-DD.")
+    if from_date > to_date:
+        raise HTTPException(422, "La fecha inicial no puede ser posterior a la final.")
+    if (to_date - from_date).days > EXPORT_MAX_RANGE_DAYS:
+        raise HTTPException(422, f"El rango máximo es de {EXPORT_MAX_RANGE_DAYS} días.")
+
+    # Rango local → UTC para consultar created_at (timestamptz almacenado en UTC).
+    # Una naive datetime se interpreta como hora local del sistema al convertir.
+    start_local = datetime(from_date.year, from_date.month, from_date.day)
+    end_local = datetime(to_date.year, to_date.month, to_date.day) + timedelta(days=1)
+    start_iso = start_local.astimezone(timezone.utc).isoformat()
+    end_iso = end_local.astimezone(timezone.utc).isoformat()
+
+    samples = _fetch_samples_range(start_iso, end_iso)
+    if camera_id:
+        samples = [r for r in samples if str(r.get("camera_id")) == camera_id]
+
+    meta = _fetch_cameras_meta()
+    header, data = _build_export_rows(samples, meta, granularity)
+
+    base_name = f"spotcheck_ocupacion_{granularity}_{from_date}_{to_date}"
+    if fmt == "xlsx":
+        content = _rows_to_xlsx(header, data, f"ocupacion_{granularity}")
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        fname = base_name + ".xlsx"
+    else:
+        content = _rows_to_csv(header, data)
+        media = "text/csv; charset=utf-8"
+        fname = base_name + ".csv"
+
+    logger.info(f"[EXPORT] {len(data)} filas ({granularity}/{fmt}) "
+                f"{from_date}→{to_date} para {(_admin.get('sub') or '?')}")
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @app.get("/health")

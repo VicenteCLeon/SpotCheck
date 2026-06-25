@@ -145,6 +145,45 @@ export async function deleteCamera(token: string, id: string): Promise<void> {
     await mutate(`${API_BASE}/api/cameras/${encodeURIComponent(id)}`, token, "DELETE");
 }
 
+// ── Exportación de ocupación (solo admin) ─────────────────────────────────────
+export type ExportGranularity = "hour" | "day" | "raw";
+export type ExportFormat = "csv" | "xlsx";
+
+export interface ExportParams {
+    from?: string;        // YYYY-MM-DD (local); vacío = últimos 7 días
+    to?: string;          // YYYY-MM-DD (local)
+    granularity: ExportGranularity;
+    format: ExportFormat;
+    cameraId?: string;    // zona específica; vacío = todas
+}
+
+/** Descarga el histórico de ocupación por horario y zona como Blob (CSV o XLSX). */
+export async function exportOccupancy(token: string, p: ExportParams): Promise<Blob> {
+    const qs = new URLSearchParams();
+    if (p.from) qs.set("from", p.from);
+    if (p.to) qs.set("to", p.to);
+    qs.set("granularity", p.granularity);
+    qs.set("format", p.format);
+    if (p.cameraId) qs.set("camera_id", p.cameraId);
+
+    const res = await fetch(`${API_BASE}/api/export/occupancy?${qs.toString()}`, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "ngrok-skip-browser-warning": "true",
+        },
+    });
+    if (res.status === 401) throw new UnauthorizedError();
+    if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+            const data = await res.json();
+            if (data?.detail) detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+        } catch { /* sin cuerpo JSON */ }
+        throw new Error(detail);
+    }
+    return res.blob();
+}
+
 // ── Supabase: histórico de ocupación (usa anon key directamente) ───────────────
 export async function fetchHourlyOccupancy(): Promise<HourPoint[]> {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/recent_occupancy`, {

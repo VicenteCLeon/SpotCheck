@@ -20,6 +20,7 @@ import DayChart from "./components/DayChart";
 import ActivityLog from "./components/ActivityLog";
 import Login from "./components/Login";
 import AdminPanel from "./components/AdminPanel";
+import ExportModal from "./components/ExportModal";
 import LivePreview from "./components/LivePreview";
 import LegalNotice, { RETENTION_MONTHS } from "./components/LegalNotice";
 import CampusMap from "./components/CampusMap";
@@ -57,6 +58,7 @@ export default function App() {
   const [userRole, setUserRole] = useState<"admin" | "viewer">("viewer");
   const [adminOpen, setAdminOpen] = useState(false);
   const [liveOpen, setLiveOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [legalOpen, setLegalOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(true);
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
@@ -425,6 +427,7 @@ export default function App() {
           userRole={userRole}
           onManageCameras={() => setAdminOpen(true)}
           onOpenLive={() => setLiveOpen(true)}
+          onExport={() => setExportOpen(true)}
           onLogout={() => handleLogout()}
         />
 
@@ -440,6 +443,15 @@ export default function App() {
           <LivePreview
             token={sessionToken}
             onClose={() => setLiveOpen(false)}
+            onSessionExpired={() => handleLogout("Sesión inválida. Vuelve a iniciar sesión.")}
+          />
+        )}
+
+        {exportOpen && sessionToken && userRole === "admin" && (
+          <ExportModal
+            token={sessionToken}
+            zones={faculties.map((f) => ({ id: f.id, name: f.name }))}
+            onClose={() => setExportOpen(false)}
             onSessionExpired={() => handleLogout("Sesión inválida. Vuelve a iniciar sesión.")}
           />
         )}

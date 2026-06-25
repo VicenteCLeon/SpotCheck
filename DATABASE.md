@@ -77,7 +77,9 @@ Serie temporal de conteos de aforo.
 
 **Accesos:**
 - `upload_loop` en backend: inserta una fila por cámara cada 10 segundos
-- No se lee directamente; se consume a través de la función RPC `recent_occupancy`
+- Gráfico histórico del frontend: se consume agregado a través de la función RPC `recent_occupancy`
+- Exportación de admin (`GET /api/export/occupancy`): el backend lee las filas en un
+  rango de fechas con la SERVICE KEY (paginando) para generar el CSV/XLSX por horario y zona
 - Retención: 12 meses (política definida en `supabase/retention.sql`)
 
 ---
